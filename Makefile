@@ -33,6 +33,7 @@ dist: release
 	mkdir -p dist/art dist/docs/img dist/docs/download
 	for f in $(DIST_FILES); do cp $$f dist/$$f; done
 	cp docs/img/*.png dist/docs/img/
+	mkdir -p dist/docs/fonts && cp docs/fonts/* dist/docs/fonts/
 	cp $(REL)/catsim64.prg $(REL)/catsim64.d64 dist/docs/download/
 	@echo "dist/ ready: $(DIST_FILES)"
 

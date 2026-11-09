@@ -6,6 +6,13 @@
 <title>Cat Simulator 64</title>
 <meta name="description" content="Be a cat on the Commodore 64! A game by illobo/netmilk.">
 <style>
+  /* C64 Pro Mono by Style64 (https://style64.org/c64-truetype), embedded
+     unmodified under its licence: fonts/C64_TrueType-license.txt */
+  @font-face {
+    font-family: "C64 Pro Mono";
+    src: url("fonts/C64_Pro_Mono-STYLE.woff") format("woff");
+    font-display: swap;
+  }
   :root {
     --bg: #3e31a2; --panel: #352879; --text: #ffffff; --soft: #bbbbbb;
     --accent: #eeee77; --link: #aaffee;
@@ -13,15 +20,17 @@
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--bg); color: var(--text);
-    font: 18px/1.6 "Trebuchet MS", Verdana, sans-serif;
+    font: 16px/1.75 "C64 Pro Mono", monospace;
+    -webkit-font-smoothing: none;
   }
   main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
   h1 {
-    font: bold 2.4em/1.1 "Courier New", monospace; letter-spacing: 0.08em;
+    font: 32px/1.25 "C64 Pro Mono", monospace;
     color: var(--accent); margin: 0.4em 0 0.1em; text-align: center;
   }
   .by { text-align: center; color: var(--soft); margin: 0 0 1.5em; }
-  h2 { color: var(--accent); font-size: 1.3em; margin: 1.6em 0 0.4em; }
+  h2 { color: var(--accent); font-size: 16px; font-weight: normal; margin: 2em 0 0.5em; }
+  b { font-weight: normal; color: var(--accent); }
   p, li { max-width: 62ch; }
   a { color: var(--link); }
   img {
@@ -29,7 +38,7 @@
     border: 4px solid #000; border-radius: 6px;
   }
   figure { margin: 0 0 20px; }
-  figcaption { color: var(--soft); font-size: 0.9em; margin-top: 4px; }
+  figcaption { color: var(--soft); margin-top: 4px; }
   .shots { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   @media (max-width: 560px) { .shots { grid-template-columns: 1fr; } }
   .box { background: var(--panel); border-radius: 8px; padding: 12px 20px; }
@@ -37,10 +46,12 @@
   td { padding: 4px 16px 4px 0; vertical-align: top; }
   td:first-child { color: var(--accent); white-space: nowrap; }
   .get {
-    display: inline-block; background: var(--accent); color: #000; font-weight: bold;
+    display: inline-block; background: var(--accent); color: #000;
     padding: 10px 20px; border-radius: 6px; text-decoration: none;
   }
-  footer { color: var(--soft); font-size: 0.85em; margin-top: 3em; text-align: center; }
+  footer { color: var(--soft); margin-top: 3em; text-align: center; }
+  code { font-family: inherit; color: var(--accent); }
+  @media (max-width: 560px) { h1 { font-size: 18px; } }
 </style>
 </head>
 <body>
@@ -81,7 +92,8 @@
   <p>Or the program file: <a href="download/catsim64.prg">catsim64.prg</a>. On a disk, type <code>LOAD"*",8,1</code> and then <code>RUN</code>.</p>
   <p>The code is here too: <a href="https://github.com/illobo/catsim64">github.com/illobo/catsim64</a></p>
 
-  <footer>Made with love for cats and old computers. MIT licence.</footer>
+  <footer>Made with love for cats and old computers. MIT licence.<br>
+  Font: <a href="https://style64.org/c64-truetype">C64 Pro Mono by Style64</a>.</footer>
 </main>
 </body>
 </html>
