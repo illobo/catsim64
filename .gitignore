@@ -1,0 +1,10 @@
+*.lst
+*.lbl
+catsim.prg
+release/
+dist/
+preview.png
+title_preview.png
+catsheet.png
+.DS_Store
+__pycache__/
