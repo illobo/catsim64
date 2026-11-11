@@ -12,6 +12,7 @@ game's meows, each followed by two dub echoes, darker (SX_POKE cdark, which
 sx_cut subtracts) and quieter (lower sustain). SX_POKE smark tells the title
 which cat is meowing so it can show the meow pose.
 """
+import math
 import os
 
 QUAD0 = 0xf0              # quad block n: bit 0 TL, 1 TR, 2 BL, 3 BR
@@ -20,7 +21,30 @@ FLOOR_ROW = 20
 BOX_COL = (3, 29)         # cat boxes
 BAR_TOP, BAR_END = 20, 51 + 9 * 8   # raster lines: top border down to the logo's end
 FLOOR_LINE = 51 + FLOOR_ROW * 8 - 1
-BARS = [6, 14, 3, 15, 3, 14, 6, 4, 2, 10, 8, 7, 8, 10, 2, 9, 11, 12, 5, 13, 5, 12, 11, 0]  # RR64's
+# The raster bars: shaded bars swinging over black. Bar i's top line is
+# sin[2*frame + a] + sin[3*frame + b] / 2 (a table of 256, so the whole dance
+# repeats every 256 frames); the bars are painted back to front.
+BAR_LINES = BAR_END - BAR_TOP
+BARS = [  # (a, b, ramp), ramps symmetric, dark edges
+    (0, 0, [9, 2, 2, 8, 8, 10, 7, 10, 8, 8, 2, 2, 9]),                # red to gold
+    (38, 236, [11, 4, 4, 4, 10, 10, 15, 10, 10, 4, 4, 4, 11]),        # purple
+    (76, 216, [6, 6, 14, 14, 14, 3, 3, 3, 14, 14, 14, 6, 6]),         # blue
+    (114, 196, [11, 5, 5, 5, 5, 13, 13, 13, 5, 5, 5, 5, 11]),         # green
+]
+BAR_H = len(BARS[0][2])
+SIN_MAX = (BAR_LINES - BAR_H) * 2 // 3
+BARSIN = [int(SIN_MAX / 2 + SIN_MAX / 2 * math.sin(2 * math.pi * i / 256) + 0.5) for i in range(256)]
+assert max(BARSIN) + max(BARSIN) // 2 + BAR_H <= BAR_LINES and all(len(r) == BAR_H for _, _, r in BARS)
+
+
+def bar_lines(frame):
+    """The colour of every bar line in a frame, as the title builds it."""
+    buf = [0] * BAR_LINES
+    for a, b, ramp in BARS:
+        top = BARSIN[(2 * frame + a) & 255] + BARSIN[(3 * frame + b) & 255] // 2
+        buf[top:top + BAR_H] = ramp
+    return buf
+
 
 GLYPHS = {
     "C": [".#######", "########", "########"] + ["###....."] * 10 + ["########", "########", ".#######"],
@@ -164,6 +188,13 @@ def build(g, cats):
     L.append("T_BAR_END = %d" % BAR_END)
     L.append("T_FLOOR_LINE = %d" % FLOOR_LINE)
     L.append("T_PROMPT = %d" % (18 * 40))
+    L.append("T_BAR_LINES = %d" % BAR_LINES)
+    L.append("tsin                    ; a bar's top line: tsin[a] + tsin[b] / 2")
+    L += g.byte_lines(BARSIN)
+    L.append("tbardef                 ; per bar: the two phases, the ramp, $ff")
+    for pa, pb, ramp in BARS:
+        L += g.byte_lines([pa, pb] + ramp + [0xff])
+    L.append("tbardef_end")
     L.append("tboxlo .byte " + ", ".join("<(SCREEN+%d)" % (FLOOR_ROW * 40 + c) for c in BOX_COL))
     L.append("tboxhi .byte " + ", ".join(">(SCREEN+%d)" % (FLOOR_ROW * 40 + c) for c in BOX_COL))
     L.append("tboxoff .byte " + ", ".join(str(r * 40 + c) for r in range(g.CAT_H) for c in range(g.CAT_W)))
@@ -172,11 +203,6 @@ def build(g, cats):
     for i, d in enumerate(tframes):
         L.append("tfr%d" % i)
         L += g.byte_lines(d)
-    bars = []
-    for c in BARS * 3:
-        bars += [c] * 3
-    L.append("bartab")
-    L += g.byte_lines(bars)
     L.append("tscreen")
     L += g.byte_lines(scr)
     L.append("tcolour")
@@ -362,7 +388,7 @@ def preview(g, scr, col, charhi):
             if r >= FLOOR_ROW:
                 bg = g.FLOOR_BG
             elif BAR_TOP <= line < BAR_END:
-                bg = BARS[((line - BAR_TOP) // 3) % len(BARS)]
+                bg = bar_lines(0)[line - BAR_TOP]
             else:
                 bg = 0
             for x in range(8):

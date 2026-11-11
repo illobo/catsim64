@@ -4,10 +4,13 @@
 ; meows when nothing is. The grey cat lives its own life as before.
 ; Build: python3 gen.py && 64tass -C -a -o catsim.prg catsim.asm
 ;
-; Raster chain: line 170 switches $D021 from wall blue to floor brown, line 252
-; restores it, writes the sprite shadow registers and runs the SFX. The main
-; loop runs once per frame after that: restore + redraw both cats from the
-; background copy, then the cat AI, ball physics, sprites, terminal and stars.
+; Raster chain: line 170 switches $D021 from the room's wall colour to its
+; floor colour, line 252 restores it, writes the sprite shadow registers and
+; runs the SFX. The main loop runs once per frame after that: restore + redraw
+; both cats from the background copy, then the cat AI, ball physics, sprites
+; and the room's own things (rooms.asm: two rooms, the lamp, the piano).
+; After the title the game runs with $01 = $35: cat frames under the BASIC
+; ROM, the background copy under the KERNAL, own IRQ entry at $fffe.
 
 SCREEN   = $0400
 COLRAM   = $d800
@@ -32,6 +35,10 @@ S_MEOW   = 7
 S_ROAM   = 8
 S_GOEAT  = 9
 S_EAT    = 10
+S_ARC    = 11             ; player: flying in an arc
+S_SCRATCH = 12            ; player: scratching the furniture
+bgscreen = $e000          ; the live background copy: RAM under the KERNAL
+bgcolour = $e400
 FEED_FIRST = 1200         ; frames until the first meal (24 s)
 FEED_EVERY = 3000         ; then every 60 s
 FOOD     = 24             ; a small portion: ~4 s for two cats
@@ -136,6 +143,53 @@ cutoff   = $6c            ; filter cutoff (high byte)
 purring  = $6d
 sidmodel = $6e            ; 0 = 6581, 1 = 8580 (detected at start)
 
+tbase    = $91            ; monitor script: where $ff loops to
+irqt     = $93            ; the bottom IRQ's own scratch byte
+
+room     = $c0            ; 0 living room, 1 piano room
+wallbg   = $c1            ; $d021 above / below the split
+floorbg  = $c2
+plat     = $c3            ; per cat: 0 floor, 1/2 the room's furniture
+arct     = $c5            ; arc jump: progress 0-32
+arcspd   = $c6            ; ...added a frame
+arcxl    = $c7            ; x fraction (cx is the high byte)
+arcsxl   = $c8            ; x step
+arcsxh   = $c9
+arcyl    = $ca            ; straight-line y
+arcyh    = $cb
+arcsyl   = $cc
+arcsyh   = $cd
+arcplat  = $ce            ; platform it lands on
+arcev    = $cf            ; 1: the leap to the desk (flash, lamp)
+flash    = $d0            ; border flash countdown
+lamp     = $d1            ; 0 whole, 1 shade falling, 2 broken
+lampy    = $d2
+lampvy   = $d3
+lampx    = $d4
+lpend    = $d5            ; lamp patch to apply before the cats are drawn
+crazy    = $d6            ; the monitor runs the cat-on-keyboard script
+uprec    = $d7            ; frames left in which "up" counts as held
+edge     = $d8            ; frames pushed against a door
+scrn     = $d9            ; scratch: swipes left
+scrbox   = $da            ; ...at which thing
+scrlit   = $db            ; ...its colours are changed
+pkey     = $dc            ; per cat: piano key it stands on, $ff none
+pvoice   = $de
+foodsave = $df            ; the bowl while we are next door
+roomreq  = $e0            ; nonzero: go through the door
+bedcy    = $e1            ; where the room's cat sleeps
+bedx     = $e2
+bedmin   = $e3
+bedmax   = $e4
+xmin     = $e5            ; player: x range where it stands
+xmax     = $e6
+overrun  = $e8            ; frames the main loop took too long (debug)
+mashx    = $e7
+hinton   = $eb            ; hint: words on screen (hintw = $ea: words said)
+seen2    = $ed            ; the player has been to the piano room: no more hints
+hintt    = $ec            ; ...frames it stays once all are
+tdirty   = $e9            ; monitor changed in the background copy: 1 text, 2 colours            ; cell the player last stood in on the desk
+
 sxl      = $70            ; sprite shadow registers
 sxh      = $78
 sy       = $80
@@ -163,8 +217,16 @@ start   sei
         .next
         inx
         bne -
-        lda #$36                ; BASIC ROM off: frames live under it
-        sta $01
+        lda #<nmi_off           ; RAM vectors under the KERNAL
+        sta $fffa
+        lda #>nmi_off
+        sta $fffb
+        lda #<irqent
+        sta $fffe
+        lda #>irqent
+        sta $ffff
+        lda #$35                ; only I/O left: cat frames under BASIC, the
+        sta $01                 ; background copy under the KERNAL
         lda #$c0                ; port A bits 6/7 out: POTs read port 1
         sta $dc02
         lda #$40
@@ -174,28 +236,12 @@ start   sei
         lda $dc0d
         lda #0
         sta $d020
-        lda #WALL_BG
-        sta $d021
         lda #$10 | (charset >> 10)  ; screen $0400, chars from RAM
         sta $d018
         lda #$08
         sta $d016
 
-        ldx #0
--       .for o = 0, o < $300, o += $100
-        lda bgscreen+o,x
-        sta SCREEN+o,x
-        lda bgcolour+o,x
-        sta COLRAM+o,x
-        .next
-        lda bgscreen+$2e8,x
-        sta SCREEN+$2e8,x
-        lda bgcolour+$2e8,x
-        sta COLRAM+$2e8,x
-        inx
-        bne -
-
-        ldx #$bf                ; zero page work area
+        ldx #$ef                ; zero page work area
         lda #0
 -       sta $00,x
         dex
@@ -205,83 +251,28 @@ start   sei
         sta lastf
         sta lastf+1
 
-        ; text colour of the monitor
-        .for r = 0, r < TERM_H, r += 1
-        ldx #TERM_W-1
-        lda #LBLUE
--       sta COLRAM+(TERM_Y+r)*40+TERM_X,x
-        dex
-        bpl -
-        .next
-        lda #<termscript
-        sta tptr
-        lda #>termscript
-        sta tptr+1
-
         ; cats
         lda #20
         sta cx
-        lda #100
-        sta cx+1
         lda #15
         sta cy
-        lda #18
-        sta cy+1
-        lda #1
-        sta dir+1
         lda #60
         sta timer
-        lda #110
-        sta timer+1
         lda #70
         sta energy
-        lda #150
-        sta energy+1
         lda #P_SIT0
         sta pose
-        sta pose+1
         lda #<300               ; first meows come a little sooner
         sta mtl
         lda #>300
         sta mth
-        lda #<450
-        sta mtl+1
-        lda #>450
-        sta mth+1
-        ldx #1
--       jsr cat_offset
-        lda off
-        sta oldlo,x
-        lda off+1
-        sta oldhi,x
-        dex
-        bpl -
 
         lda #<FEED_FIRST
         sta ftl
         lda #>FEED_FIRST
         sta fth
-        ldx #2                  ; remember the cells under the kibble
--       lda SCREEN+KIBBLE_POS,x
-        sta kiborig,x
-        lda COLRAM+KIBBLE_POS,x
-        sta kibocol,x
-        dex
-        bpl -
-
-        ; ball
-        lda #160
-        sta bxl
-        lda #170
-        sta byh
-        lda #$ff
-        sta owner
 
         ; sprites: 0 strands, 1 disc, 2 shadow, 3/4 zzz, 5/6 words
-        lda #RED
-        sta $d027
-        lda #LRED
-        sta $d028
         lda #BLACK
         sta $d029
         lda #WHITE
@@ -316,6 +307,17 @@ start   sei
         lda $d41a
         sta opoty
 
+        lda #0                  ; the living room, its cat and ball
+        jsr room_load
+        ldx #1
+-       jsr cat_offset
+        lda off
+        sta oldlo,x
+        lda off+1
+        sta oldhi,x
+        dex
+        bpl -
+
         lda #<irq_split
         sta $0314
         lda #>irq_split
@@ -333,7 +335,7 @@ main    lda vsync
         beq main
         lda #0
         sta vsync
-        inc frame
+mframe  inc frame
         jsr cats_draw
         lda $d012               ; how late did the cats get done? (debug)
         sta drawend
@@ -347,15 +349,37 @@ main    lda vsync
         jsr cat_think
         jsr ball_update
         jsr sprites
-        jsr terminal
-        jsr stars
-        jsr feeder
+        jsr roomfx              ; monitor, stars, feeder, lamp / scratching
         jsr purr
-        jmp main
+        jsr room_check
+        lda vsync               ; (debug) the next frame has begun already:
+        beq +                   ; count the frames we were too slow
+        inc overrun
++       jmp main
 
 ; ------------------------------------------------------------------ IRQs
+; RAM under the KERNAL is banked in, so the vector at $fffe comes here: the
+; same 29 cycles as the KERNAL's entry, to keep the split where it was
+irqent  pha
+        txa
+        pha
+        tya
+        pha
+        tsx
+        lda $0104,x
+        and #$10
+        beq +
++       jmp ($0314)
+
+irqexit pla
+        tay
+        pla
+        tax
+        pla
+        rti
+
 irq_split                       ; lands in the right border of line 170
-        lda #FLOOR_BG
+        lda floorbg
         sta $d021
         lda #1
         sta $d019
@@ -365,15 +389,15 @@ irq_split                       ; lands in the right border of line 170
         sta $0314
         lda #>irq_bot
         sta $0315
-        jmp $ea81
+        jmp irqexit
 
 irq_bot lda #1
         sta $d019
-        lda #WALL_BG
+        lda wallbg
         sta $d021
         ldx #7
         lda #0
-        sta tmp2
+        sta irqt
 -       lda sxl,x
         ldy times2,x
         sta $d000,y
@@ -381,12 +405,12 @@ irq_bot lda #1
         sta $d001,y
         lda sxh,x
         lsr a
-        rol tmp2
+        rol irqt
         lda sptr,x
         sta SCREEN+$3f8,x
         dex
         bpl -
-        lda tmp2
+        lda irqt
         sta $d010
         lda spen
         sta $d015
@@ -399,7 +423,7 @@ irq_bot lda #1
         sta $0314
         lda #>irq_split
         sta $0315
-        jmp $ea81
+        jmp irqexit
 
 times2  .byte 0, 2, 4, 6, 8, 10, 12, 14
 
@@ -477,6 +501,7 @@ cats_draw
         jsr restore
         ldx #1
         jsr restore
+        jsr bghook              ; lamp patch, monitor text
         ldx #0                  ; the cat further back first
         lda cy+1
         cmp cy
@@ -623,7 +648,8 @@ cat_think
 +       lda wtime,x
         beq +
         dec wtime,x
-+       cpx #0                  ; cat 0 is the player's
++       jsr piano
+        cpx #0                  ; cat 0 is the player's
         bne +
         jmp player
 +       lda mtl,x               ; time to meow at the viewer?
@@ -649,9 +675,23 @@ dispatch
         rts
 
 states  .word st_sit-1, st_chase-1, st_carry-1, st_bat-1, st_tobed-1, st_sleep-1, st_hiss-1, st_meow-1
-        .word st_roam-1, st_goeat-1, st_eat-1
+        .word st_roam-1, st_goeat-1, st_eat-1, st_sit-1, st_sit-1
 
 start_meow
+        jsr meow_pose
+        jsr rnd                 ; a different meow each time, in this cat's voice
+        and #3
+        sta tmp
+        txa
+        asl a
+        asl a
+        ora tmp
+        clc
+        adc #FX_MEOW
+        jmp sfx_play
+
+; cat X (= cat) turns to the viewer, balloon up, for 75 frames
+meow_pose
         lda meowlo,x
         sta mtl,x
         lda meowhi,x
@@ -674,17 +714,8 @@ start_meow
 +       sta cx,x
         lda #SPRBASE+SPR_MEOW
         sta word,x
-        jsr rnd                 ; a different meow each time, in this cat's voice
-        and #3
-        sta tmp
-        txa
-        asl a
-        asl a
-        ora tmp
-        clc
-        adc #FX_MEOW
-        jsr sfx_play
-        rts
+        lda #$a2                ; (the piano takes voice 2 out of the filter)
+        jmp wroute
 
 meowlo  .byte <MEOW0, <MEOW1
 meowhi  .byte >MEOW0, >MEOW1
@@ -772,25 +803,28 @@ go_bed  jsr drop_if_owner
         sta state,x
         lda #60
         sta timer,x
-        lda bedx,x
+        lda bedx
         sta tx,x
         sta tmp
-        lda #BED_CY
+        lda bedcy
         sta tmp2
         jsr overlaps            ; the player is in the way: lie next to it
-        bcc ++
+        bcc gb_out              ; if the bed is wide enough
         lda cx
-        cmp #COUCH_MAXX-25
-        bcs +
+        clc
         adc #26
-        sta tx,x
-        rts
-+       sbc #26
-        sta tx,x
-+       rts
+        cmp bedmax
+        bcc gb_set
+        beq gb_set
+        lda cx
+        sbc #26
+        bcc gb_out
+        cmp bedmin
+        bcc gb_out
+gb_set  sta tx,x
+gb_out  rts
 
 catphase .byte 0, 61
-bedx    .byte 10, 36
 
 ; ---- chasing the ball (free or in the other cat's mouth)
 st_chase
@@ -811,6 +845,9 @@ st_chase
         cmp cat                 ; in the other cat's mouth: steal it?
         beq l1_
         tay
+        lda state,y             ; (not in mid-air)
+        cmp #S_ARC
+        bcs l1_
         jsr rnd
         cmp stealp,y
         bcs l1_
@@ -1027,7 +1064,7 @@ st_tobed
         ldy cx,x
         cpy tmp
         bne +
-        lda #BED_CY
+        lda bedcy
 +       sta ty,x
         lda tx,x
         cmp cx,x
@@ -1048,7 +1085,7 @@ st_tobed
         cmp tx,x
         bne +
         lda cy,x
-        cmp #BED_CY
+        cmp bedcy
         bne +
         lda #S_SLEEP
         sta state,x
@@ -1554,12 +1591,15 @@ free    ldy #0                  ; x += vx
         sta byh
         ; walls
         lda bxh
+        bmi bwall               ; below 0: let go at the left edge, facing left
         bne +
         lda bxl
         cmp #8
         bcs l9_
-        lda #8
+bwall   lda #8
         sta bxl
+        lda #0
+        sta bxh
         lda vxh
         bpl l9_
         jsr negvx
@@ -1575,7 +1615,15 @@ free    ldy #0                  ; x += vx
 l9_      lda byh
         cmp #BYMIN
         bcs +
+        cmp #BYMIN-8            ; let go up on the furniture: that much
+        bcs bfloor              ; higher above the floor instead
         lda #BYMIN
+        sec
+        sbc byh
+        clc
+        adc bzh
+        sta bzh
+bfloor  lda #BYMIN
         sta byh
         lda vyh
         bpl l10_
@@ -1807,7 +1855,30 @@ nozzz   lda wtime,x             ; speech word
 noword  dex
         bmi +
         jmp catspr
-+        rts
++       lda lamp                ; the falling lamp shade borrows sprite 3
+        cmp #1
+        bne +
+        lda lampx
+        sta sxl+3
+        lda #0
+        sta sxh+3
+        ldy #SPRBASE+SPR_SHADE
+        lda lampy
+        sta sy+3
+        cmp #SHADE_Y0+20
+        bcc shfr
+        iny
+        cmp #SHADE_Y0+48
+        bcc shfr
+        iny
+        cmp #SHADE_Y0+76
+        bcc shfr
+        iny
+shfr    sty sptr+3
+        lda spen
+        ora #$08
+        sta spen
++       rts
 
 wobble  .byte 0, 2, 3, 1
 zoffs   .byte 46+24, 6+24
@@ -1817,8 +1888,36 @@ wbit    .byte $20, $40
 ; ------------------------------------------------------------------ monitor
 ; The C= key (keyboard column 7 is already selected for the mouse) toggles
 ; tape-loader stripes on the monitor; the script also shows them while LOADING.
+; All of it is written to the background copy; bghook puts it on screen
+; before the cats are drawn, so a cat on the desk stands in front of the text.
+; With the player on the desk the computer goes crazy: its own script, and
+; every cell the cat steps into types a key.
 terminal
-        lda $dc01
+        ldy #0
+        lda plat
+        cmp #PL_DESK
+        bne +
+        iny
++       cpy crazy
+        beq +
+        sty crazy
+        jsr term_reset
++       lda crazy
+        beq +
+        lda cx
+        lsr a
+        lsr a
+        cmp mashx
+        beq +
+        sta mashx
+        jsr rnd
+        and #31
+        tay
+        lda mashchars,y
+        jsr tput
+        lda #FX_BOUNCE          ; clack
+        jsr sfx_play
++       lda $dc01
         and #$20
         tay
         eor ckey
@@ -1855,7 +1954,7 @@ loadbars
         lda trowhi,x
         sta p1+1
         clc
-        adc #>(COLRAM-SCREEN)
+        adc #>(bgcolour-bgscreen)
         sta p3+1
         ldy #TERM_W-1
 -       lda tmp
@@ -1866,10 +1965,31 @@ loadbars
         bpl -
         dex
         bpl --
+        lda #3
+        sta tdirty
         rts
+
+; the script from the top (crazy or not), blank monitor, LED off
+term_reset
+        ldx #<termscript
+        ldy #>termscript
+        lda crazy
+        beq +
+        ldx #<crazyscript
+        ldy #>crazyscript
++       stx tptr
+        stx tbase
+        sty tptr+1
+        sty tbase+1
+        lda #0
+        sta twait
+        lda #DGREY
+        sta bgcolour+LED_POS
 
 ; bars off: blank monitor, text colour back, cursor home
 bars_clear
+        lda #3
+        sta tdirty
         lda #0
         sta lbars
         sta trow
@@ -1877,9 +1997,9 @@ bars_clear
         ldx #TERM_W-1
 -       .for r = 0, r < TERM_H, r += 1
         lda #32
-        sta SCREEN+(TERM_Y+r)*40+TERM_X,x
+        sta bgscreen+(TERM_Y+r)*40+TERM_X,x
         lda #LBLUE
-        sta COLRAM+(TERM_Y+r)*40+TERM_X,x
+        sta bgcolour+(TERM_Y+r)*40+TERM_X,x
         .next
         dex
         bpl -
@@ -1900,8 +2020,15 @@ term_run
         .byte $2c
 +       lda #32
         ldy tcol
+
+; char A to (p1),y, if it isn't there yet
+tpoke   cmp (p1),y
+        beq +
         sta (p1),y
-        rts
+        lda #1
+        ora tdirty
+        sta tdirty
++       rts
 
 tcursor ldy trow
         lda trowlo,y
@@ -1913,7 +2040,7 @@ tcursor ldy trow
 tnext   jsr tcursor             ; hide the cursor
         ldy tcol
         lda #32
-        sta (p1),y
+        jsr tpoke
 tloop   ldy #0
         lda (tptr),y
         inc tptr
@@ -1930,9 +2057,9 @@ tloop   ldy #0
         rts
 +       cmp #$ff
         bne +
-        lda #<termscript
+        lda tbase
         sta tptr
-        lda #>termscript
+        lda tbase+1
         sta tptr+1
         jmp tloop
 +       cmp #$c2
@@ -1950,55 +2077,68 @@ tloop   ldy #0
         and #1                  ; $c0 LED on, $c1 off
         tay
         lda ledcol,y
-        sta COLRAM+LED_POS
+        sta bgcolour+LED_POS
         jmp tloop
 
-tchar   pha
+tchar   jmp tput                ; one character (or line feed) a frame: it
+tnl     jmp tnewl               ; prints like a terminal, and costs little
+
+; char A at the cursor, which moves on; wraps and scrolls
+tput    pha
         jsr tcursor
         pla
         ldy tcol
-        sta (p1),y
+        jsr tpoke
         inc tcol
         lda tcol
         cmp #TERM_W
-        bcc tloop
-tnl     lda #0
+        bcc tpx
+tnewl   lda #0
         sta tcol
         inc trow
         lda trow
         cmp #TERM_H
-        bcc tloop
+        bcc tpx
         dec trow
         ldx #0                  ; scroll up one line
 -       .for r = 0, r < TERM_H-1, r += 1
-        lda SCREEN+(TERM_Y+r+1)*40+TERM_X,x
-        sta SCREEN+(TERM_Y+r)*40+TERM_X,x
+        lda bgscreen+(TERM_Y+r+1)*40+TERM_X,x
+        sta bgscreen+(TERM_Y+r)*40+TERM_X,x
         .next
         lda #32
-        sta SCREEN+(TERM_Y+TERM_H-1)*40+TERM_X,x
+        sta bgscreen+(TERM_Y+TERM_H-1)*40+TERM_X,x
         inx
         cpx #TERM_W
         bne -
-        jmp tloop
+        lda #1
+        ora tdirty
+        sta tdirty
+tpx     rts
 
 tclear  ldx #TERM_W-1
         lda #32
 -       .for r = 0, r < TERM_H, r += 1
-        sta SCREEN+(TERM_Y+r)*40+TERM_X,x
+        sta bgscreen+(TERM_Y+r)*40+TERM_X,x
         .next
         dex
         bpl -
         lda #0
         sta trow
         sta tcol
+        lda #1
+        ora tdirty
+        sta tdirty
         jmp tloop
 
 ledcol  .byte RED, DGREY
-trowlo  .byte <(SCREEN+(TERM_Y+range(TERM_H))*40+TERM_X)
-trowhi  .byte >(SCREEN+(TERM_Y+range(TERM_H))*40+TERM_X)
+trowlo  .byte <(bgscreen+(TERM_Y+range(TERM_H))*40+TERM_X)
+trowhi  .byte >(bgscreen+(TERM_Y+range(TERM_H))*40+TERM_X)
 
 ; ------------------------------------------------------------------ stars
-stars   lda frame
+stars   lda state               ; (not while the player flies past the window)
+        cmp #S_ARC
+        beq +
+        lda frame
         and #7
         bne +
         jsr rnd
@@ -2512,13 +2652,53 @@ FX_MEOW  = 4              ; 8 variants (gen.py): cat*4 + kind
 FX_HISS  = 12
 FX_PURR  = 13
 FX_PURROFF = 14
-fxvoice .byte 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2
+FX_CRASH = 15
+FX_TINKLE = 16
+FX_SCRATCH = 17
+FX_PIANO = 18
+FX_PIANO2 = 19
+FX_HINT  = 20             ; "go right to enter the next room", in meows (gen.py)
+fxvoice .byte 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 0, 0, 0, 1, 1
 fxlo    .byte <fx_kick, <fx_bounce, <fx_grab, <fx_ding
         .byte <meow0, <meow1, <meow2, <meow3, <meow4, <meow5, <meow6, <meow7, <fx_hiss
-        .byte <fx_purr, <fx_purroff
+        .byte <fx_purr, <fx_purroff, <fx_crash, <fx_tinkle, <fx_scratch, <fx_piano, <fx_piano2, <hintfx
 fxhi    .byte >fx_kick, >fx_bounce, >fx_grab, >fx_ding
         .byte >meow0, >meow1, >meow2, >meow3, >meow4, >meow5, >meow6, >meow7, >fx_hiss
-        .byte >fx_purr, >fx_purroff
+        .byte >fx_purr, >fx_purroff, >fx_crash, >fx_tinkle, >fx_scratch, >fx_piano, >fx_piano2, >hintfx
+
+; the lamp shade hits the floor: bright noise falling to a rumble (voice 3)...
+fx_crash #HRESTART
+        .byte SX_ROUTE, $a2
+        .byte SX_ADSR, $0a, $00
+        .byte SX_FREQ, $00, $c8, SX_CTRL, $81
+        .byte SX_PSLIDE, <-$0b00, >-$0b00, 14, SX_WAIT, 14
+        .byte SX_FREQ, $00, $14, SX_WAIT, 22, SX_END
+
+; ...and shards: four high blips (voice 1)
+fx_tinkle #HRESTART
+        .byte SX_ADSR, $04, $00
+        .byte SX_FREQ, $00, $e0, SX_CTRL, $11, SX_WAIT, 3
+        .byte SX_CTRL, $10, SX_FREQ, $00, $b4, SX_CTRL, $11, SX_WAIT, 3
+        .byte SX_CTRL, $10, SX_FREQ, $00, $f4, SX_CTRL, $11, SX_WAIT, 4
+        .byte SX_CTRL, $10, SX_FREQ, $00, $c8, SX_CTRL, $11, SX_WAIT, 8, SX_END
+
+; claws in the upholstery: a short rasp, noise chopped at 25 Hz, rising
+fx_scratch #HRESTART
+        .byte SX_ADSR, $00, $90
+        .byte SX_FREQ, $00, $30, SX_CTRL, $81, SX_CHOP, 1
+        .byte SX_PSLIDE, $00, $05, 7, SX_WAIT, 7, SX_END
+
+; a piano key: the caller has set the frequency. Pulse, struck hard, falling
+; quickly to a low sustain, then a long release. No hard restart (the notes
+; come every other frame when a cat runs along the keys) and no filter, so
+; both SID models play it alike.
+fx_piano
+        .byte SX_CTRL, $40, SX_ADSR, $08, $49, SX_PW, $00, $08
+        .byte SX_CTRL, $41, SX_WAIT, 7, SX_CTRL, $40, SX_WAIT, 30, SX_END
+fx_piano2
+        .byte SX_ROUTE, $a0
+        .byte SX_CTRL, $40, SX_ADSR, $08, $49, SX_PW, $00, $05
+        .byte SX_CTRL, $41, SX_WAIT, 7, SX_CTRL, $40, SX_WAIT, 30, SX_END
 
 ; purr: a cat's purr is a ~25 Hz flutter, too low to play as a pitch (the C64
 ; output stage and TV speakers lose it). So dark noise (Fn $0600: the noise
@@ -2605,6 +2785,7 @@ charset .fill $800
 
 ; more code after the data: only sprites and the VIC need bank 0 below $4000
         .include "player.asm"
+        .include "rooms.asm"
         .include "title.asm"
         .cerror * > $a000, "code runs into the left-facing frames"
 

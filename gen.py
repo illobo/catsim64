@@ -329,7 +329,8 @@ def region_bg(row):
     return WALL_BG if row < SPLIT_ROW else FLOOR_BG
 
 
-def draw_room():
+def draw_room(lamp=0):
+    """lamp: 0 whole, 1 the shade knocked off (bare bulb), 2 and lying on the floor."""
     cv = Canvas(320, 200, None)       # None = region background
     # wall: purple with darker vertical pinstripes
     for y in range(0, 120):
@@ -371,9 +372,16 @@ def draw_room():
     cv.rect(x1 - 6, 112, x1 - 2, 122, BLACK)
 
     # floor lamp between couch and desk
-    cv.poly([(148, 26), (168, 26), (174, 44), (142, 44)], YELLOW)
-    cv.rect(157, 44, 159, 114, GREY)
+    if lamp == 0:
+        cv.poly([(148, 26), (168, 26), (174, 44), (142, 44)], YELLOW)
+        cv.rect(157, 44, 159, 114, GREY)
+    else:
+        cv.rect(157, 48, 159, 114, GREY)
+        cv.rect(156, 40, 160, 48, WHITE)            # the bare bulb
     cv.ellipse(158, 116, 8, 2.5, DGREY)
+    if lamp == 2:
+        cv.poly([(SHADE_FLOOR[0] - 12, SHADE_FLOOR[1] - 3), (SHADE_FLOOR[0] + 12, SHADE_FLOOR[1] - 8),
+                 (SHADE_FLOOR[0] + 12, SHADE_FLOOR[1] + 8), (SHADE_FLOOR[0] - 12, SHADE_FLOOR[1] + 3)], YELLOW)
 
     # desk
     dx0, dx1 = 180, 318
@@ -437,6 +445,11 @@ def room_cells(cv):
     return scr, col
 
 
+SHADE_AIR = (158, 35)         # centre of the lamp shade on the lamp
+SHADE_FLOOR = (146, 129)      # ...and where it ends up
+DESK_CY = 6                   # cat on the desk top (ground y 87)
+DESK_X0, DESK_X1 = 90, 128    # cat x range there
+CAT2_BODY = LGREY             # body colour of room 2's own cat
 FEED_X0 = 216                 # feeder hopper x (cell aligned)
 KIBBLE = (27, 15)             # 3 kibble cells above the bowl (row 16)
 FEED_LIGHT = (29, 12)
@@ -455,23 +468,37 @@ def sc(text):
 NL = 0x60     # newline; screen code $0d is the letter M
 
 
-def term_script():
-    """Bytes: <$80 char, $60 newline, $80+n wait n frames, $c0/$c1 LED on/off, $c2 clear, $c3/$c4 loader stripes on/off, $ff loop."""
-    s = []
+class Script:
+    """Monitor script bytes: <$80 char, $60 newline, $80+n wait n frames, $c0/$c1 LED on/off, $c2 clear, $c3/$c4 loader stripes on/off, $ff loop."""
 
-    def wait(n):
+    def __init__(self):
+        self.s = []
+
+    def wait(self, n):
         while n > 0:
-            s.append(0x80 + min(n, 63))
+            self.s.append(0x80 + min(n, 63))
             n -= 63
 
-    def typ(text, speed=7):
+    def typ(self, text, speed=7):
         for code in sc(text):
-            s.append(code)
-            wait(speed + (code * 7) % 5)
+            self.s.append(code)
+            self.wait(speed + (code * 7) % 5)
 
-    def out(text):
-        s.extend(sc(text))
+    def out(self, text):
+        self.s.extend(sc(text))
 
+    def line(self, text):
+        self.out(text)
+        if len(text) < TERM_W:      # a full line wraps by itself
+            self.s.append(NL)
+
+    def op(self, *codes):
+        self.s.extend(codes)
+
+
+def term_script():
+    t = Script()
+    wait, typ, out, s = t.wait, t.typ, t.out, t.s
     s.append(0xc2)
     out("CATSIM 64")
     s.append(NL)
@@ -510,6 +537,81 @@ def term_script():
     wait(200)
     s.append(0xff)
     return s
+
+
+MASH = "ASDFJKL;:XCVBNM,.@*=+-/1234QWERTY"     # what paws type (the engine picks among the first 32)
+
+
+def crazy_script():
+    """The monitor while a cat stands on the keyboard."""
+    t = Script()
+    ON, OFF, CLR, BARS, NOBARS = 0xc0, 0xc1, 0xc2, 0xc3, 0xc4
+    t.op(CLR)
+    t.line("?SYNTAX")
+    t.line("  ERROR")
+    t.line("READY.")
+    t.wait(45)
+    t.typ("ASDFGHJKL", 2)
+    t.op(ON)
+    t.typ("NNNNNNM,.", 1)
+    t.op(OFF)
+    t.wait(10)
+    t.line("?SYNTAX")
+    t.line("  ERROR")
+    t.line("READY.")
+    t.wait(40)
+    t.op(ON)
+    t.typ('LOAD"CAT"', 3)
+    t.wait(25)
+    t.op(OFF, ON, OFF)
+    t.line("?FILE NOT")
+    t.line("  FOUND")
+    t.line("READY.")
+    t.wait(40)
+    t.typ("POKE1,PAW", 3)
+    t.op(BARS, ON)
+    t.wait(45)
+    t.op(NOBARS, OFF)
+    t.line("?OUT OF")
+    t.line(" MEMORY")
+    t.line("READY.")
+    t.wait(50)
+    t.typ("10 MEOW", 3)
+    t.op(NL)
+    t.typ("20 GOTO10", 3)
+    t.typ("RUN", 4)
+    t.op(NL)
+    for i in range(10):
+        t.out("MEOWMEOWM" if i % 2 else "EOWMEOWME")
+        t.op(ON if i % 2 else OFF)
+        t.wait(4)
+    t.op(OFF)
+    t.line("?FORMULA")
+    t.line("TOO")
+    t.line("COMPLEX")
+    t.wait(60)
+    t.line("READY.")
+    t.typ("SYS64738", 3)
+    t.op(NL)
+    t.wait(8)
+    t.op(BARS)
+    t.wait(14)
+    t.op(NOBARS)
+    t.wait(20)
+    t.line("*CAT  64*")
+    t.line("38911")
+    t.line("PAWS FREE")
+    t.out("READY.")
+    t.wait(80)
+    t.op(NL)
+    t.line("?TOO MANY")
+    t.line("   PAWS")
+    t.wait(30)
+    t.line("?CAT ON")
+    t.line("KEYBOARD")
+    t.wait(70)
+    t.op(0xff)
+    return t.s
 
 
 # ------------------------------------------------------------ sprites
@@ -631,6 +733,96 @@ def word_sprite(word):
     return sprite_bytes(pix)
 
 
+def shade_sprites():
+    """The falling lamp shade: 4 frames at 2x2 px (the sprite is expanded both
+    ways), tumbling from upright to the shape that ends up on the floor."""
+    out = []
+    quad = [(-10, -9), (10, -9), (16, 9), (-16, 9)]
+    final = [(-12, -3), (12, -8), (12, 8), (-12, 3)]
+    for ang in (0, 30, 60, None):
+        if ang is None:
+            pts = final
+        else:
+            a = math.radians(-ang)
+            pts = [(x * math.cos(a) - y * math.sin(a), x * math.sin(a) + y * math.cos(a)) for x, y in quad]
+        cv = Canvas(48, 42, 0)
+        cv.poly([(x + 24, y + 21) for x, y in pts], 1)
+        pix = blank()
+        for y in range(21):
+            for x in range(24):
+                pix[y][x] = cv.get(x * 2, y * 2) + cv.get(x * 2 + 1, y * 2) + cv.get(x * 2, y * 2 + 1) + cv.get(x * 2 + 1, y * 2 + 1) >= 2
+        out.append(sprite_bytes(pix))
+    return out
+
+
+def lz(data):
+    """Pack for unlz (rooms.asm): 0 end, 1-$7f that many literals, $80+n copy
+    n+2 bytes from <next byte>+1 back. Optimal parse."""
+    n = len(data)
+    best = []
+    for i in range(n):
+        m = (0, 0)
+        for o in range(1, min(256, i) + 1):
+            l = 0
+            while i + l < n and l < 129 and data[i + l] == data[i + l - o]:
+                l += 1
+            if l > m[0]:
+                m = (l, o)
+        best.append(m)
+    cost = [0] * (n + 1)
+    choice = [None] * (n + 1)
+    for i in range(n - 1, -1, -1):
+        cost[i] = 10 ** 9
+        for l in range(1, min(127, n - i) + 1):
+            if 1 + l + cost[i + l] < cost[i]:
+                cost[i], choice[i] = 1 + l + cost[i + l], (l, 0)
+        l, o = best[i]
+        for ll in range(2, l + 1):
+            if 2 + cost[i + ll] < cost[i]:
+                cost[i], choice[i] = 2 + cost[i + ll], (ll, o)
+    out, i = [], 0
+    while i < n:
+        l, o = choice[i]
+        out += [0x80 | (l - 2), o - 1] if o else [l] + list(data[i:i + l])
+        i += l
+    out.append(0)
+    back, j = [], 0                   # check
+    while out[j]:
+        if out[j] < 0x80:
+            back += out[j + 1:j + 1 + out[j]]
+            j += 1 + out[j]
+        else:
+            for _ in range((out[j] & 0x7f) + 2):
+                back.append(back[-out[j + 1] - 1])
+            j += 2
+    assert back == list(data)
+    return out
+
+
+def room1_cells(lamp=0):
+    scr, col = room_cells(draw_room(lamp))
+    for x, y, ch in STARS:
+        scr[y * 40 + x] = ch
+        col[y * 40 + x] = WHITE
+    scr[LED[1] * 40 + LED[0]] = 0x62          # small block, colour animated
+    col[LED[1] * 40 + LED[0]] = DGREY
+    scr[FEED_LIGHT[1] * 40 + FEED_LIGHT[0]] = 0x51
+    col[FEED_LIGHT[1] * 40 + FEED_LIGHT[0]] = DGREY
+    for r in range(TERM_H):                   # the monitor's text colour
+        for c in range(TERM_W):
+            col[(TERM_Y + r) * 40 + TERM_X + c] = LBLUE
+    return scr, col
+
+
+def patch(a, b):
+    """Cells that differ between two rooms: hi, lo, char, colour; $ff ends."""
+    out = []
+    for i in range(1000):
+        if (a[0][i], a[1][i]) != (b[0][i], b[1][i]):
+            out += [i >> 8, i & 255, b[0][i], b[1][i]]
+    return out + [0xff]
+
+
 # ------------------------------------------------------------ meows
 # A meow, after the phonetics research (Schötz et al.): f0 of a few hundred
 # Hz in a rise-fall arch (rising endings sound friendly/asking, falling ones
@@ -671,28 +863,68 @@ def meow_script(base, kind):
     return out + [0]
 
 
+# The hint the grey cat "says" when the player lands on the desk: a string of
+# meows with the rhythm and melody of the spoken sentence. Per syllable:
+# word shown from here on (0: same word), frames, pitch start/peak/end in
+# semitones from the grey cat's voice, where the peak is (fraction), the
+# filter cutoff start/peak/end (the vowel: "oh" dark, "ee" bright, "oo"
+# closed), frames of silence after it.
+HINT_TEXT = "GO RIGHT TO ENTER THE NEXT ROOM"
+HINT_ROW = 0                    # top wall row: no cat ever gets there
+HINT_ZP = 0xea                  # hintw: the script pokes the word count here
+HINT_SYL = [
+    (1, 7, -4, -3, -4, 0.5, 0x14, 0x34, 0x20, 1),     # go
+    (2, 16, 1, 4, 2, 0.45, 0x30, 0x70, 0x58, 8),      # RIGHT (ah-ee), a breath
+    (3, 6, -3, -2, -3, 0.5, 0x10, 0x20, 0x14, 1),     # to
+    (4, 12, 2, 4, 3, 0.4, 0x38, 0x64, 0x48, 1),       # EN
+    (0, 7, 0, 0, -2, 0.4, 0x30, 0x40, 0x24, 2),       # ter
+    (5, 6, -4, -3, -4, 0.5, 0x20, 0x2c, 0x20, 1),     # the
+    (6, 14, 3, 5, 3, 0.4, 0x34, 0x68, 0x50, 4),       # NEXT, cut short
+    (7, 30, 1, 2, -7, 0.2, 0x18, 0x30, 0x0c, 0),      # ROOM, falling and held
+]
+
+
+def hint_script():
+    """-> (bytes, frames)"""
+    out = [3, 0, 1, 0, 0, 4, 1]                       # hard restart
+    out += [1, 0x25, 0xa5, 5, 0x00, 0x06]             # ADSR (quick release between syllables), pulse width
+    total = 1
+    for word, n, s0, s1, s2, tp, c0, c1, c2, gap in HINT_SYL:
+        f = [int(MEOW_BASE[1] * 2 ** (s / 12) / PAL_HZ) for s in (s0, s1, s2)]
+        n1 = max(1, round(n * tp))
+        n2 = n - n1
+        if word:
+            out += [15, HINT_ZP, word]
+        out += [2, f[0] & 255, f[0] >> 8, 6, c0, 3, 0x41]
+        for fa, fb, ca, cb, k in ((f[0], f[1], c0, c1, n1), (f[1], f[2], c1, c2, n2)):
+            d = int((fb - fa) / k) & 0xffff
+            out += [7, d & 255, d >> 8, k, 9, int((cb - ca) / k) & 255, k, 4, k]
+        out += [3, 0x40]
+        if gap:
+            out += [4, gap]
+        total += n + gap
+    return out + [15, HINT_ZP, len(HINT_TEXT.split()) + 1, 0], total
+
+
 # ------------------------------------------------------------ output
 def byte_lines(data, per=16):
     return ["        .byte " + ",".join("$%02x" % b for b in data[i:i + per]) for i in range(0, len(data), per)]
 
 
 def main():
-    room = draw_room()
-    scr, col = room_cells(room)
-    for x, y, ch in STARS:
-        scr[y * 40 + x] = ch
-        col[y * 40 + x] = WHITE
-    scr[LED[1] * 40 + LED[0]] = 0x62 + 0x80 - 0x80   # small block, colour animated
-    col[LED[1] * 40 + LED[0]] = DGREY
-    scr[FEED_LIGHT[1] * 40 + FEED_LIGHT[0]] = 0x51
-    col[FEED_LIGHT[1] * 40 + FEED_LIGHT[0]] = DGREY
+    scr, col = room1_cells()
+    lamp1, lamp2 = room1_cells(1), room1_cells(2)
+    sys.modules.setdefault("gen", sys.modules[__name__])
+    import room2
+    scr2, col2 = room2.room2_cells()
 
     cats = cat_frames()
-    dyn = dyn_codes(scr)
+    dyn = dyn_codes(set(scr) | set(lamp1[0]) | set(lamp2[0]) | set(scr2))
 
     balls, disc, shadow = ball_frames()
     zz = zzz_frames()
     words = [word_sprite("MEOW"), word_sprite("HISS"), sprite_bytes(bubble_shape())]
+    shades = shade_sprites()
 
     L = ["; generated by gen.py - do not edit", ""]
     names = "BLACK WHITE RED CYAN PURPLE GREEN BLUE YELLOW ORANGE BROWN LRED DGREY GREY LGREEN LBLUE LGREY"
@@ -730,8 +962,41 @@ def main():
     L.append("SPR_MEOW = 21")
     L.append("SPR_HISS = 22")
     L.append("SPR_BUBBLE = 23")
+    L.append("SPR_SHADE = 24")
+    L.append("SHADE_X0 = %d" % (SHADE_AIR[0] - 24 + 24))     # sprite coordinates of the 48x42 sprite
+    L.append("SHADE_Y0 = %d" % (SHADE_AIR[1] - 21 + 50))
+    L.append("SHADE_X1 = %d" % (SHADE_FLOOR[0] - 24 + 24))
+    L.append("SHADE_Y1 = %d" % (SHADE_FLOOR[1] - 21 + 50))
+    L.append("DESK_CY = %d" % DESK_CY)
+    L.append("DESK_X0 = %d" % DESK_X0)
+    L.append("DESK_X1 = %d" % DESK_X1)
+    L.append("WALL_BG2 = %d" % room2.WALL_BG2)
+    L.append("FLOOR_BG2 = %d" % room2.FLOOR_BG2)
+    L.append("CAT2_BODY = %d" % CAT2_BODY)
+    L.append("BALL2_STRAND = %d" % room2.BALL2_STRAND)
+    L.append("BALL2_DISC = %d" % room2.BALL2_DISC)
+    L.append("PIANO_CY = %d" % room2.PIANO_KEYS_CY)
+    L.append("PIANO_X0 = %d" % room2.PIANO_CX_MIN)
+    L.append("PIANO_X1 = %d" % room2.PIANO_CX_MAX)
+    L.append("SOFA_CY = %d" % room2.SOFA2_CY)
+    L.append("SOFA_X0 = %d" % room2.SOFA2_CX_MIN)
+    L.append("SOFA_X1 = %d" % min(room2.SOFA2_CX_MAX, 120))  # the cushion stays visible
+    L.append("SOFA_SCR_CX = %d" % room2.SOFA2_SCRATCH_CX)
+    L.append("SOFA_SCR_CY = %d" % room2.SOFA2_SCRATCH_CY)
+    L.append("PLANT_SCR_CX = %d" % room2.PLANT_SCRATCH_CX)
+    L.append("PLANT_SCR_CY = %d" % room2.PLANT_SCRATCH_CY)
+    pot = room2.PLANT_POT
+    L.append("PLANT_LEFT_CX = %d" % ((pot[0] * 8 - 56) // 2))  # standing left of the pot, facing it
+    pc, pr, pw, ph = room2.PLANT_BOX
+    pw = max(pw, 6)
+    L.append("PLANT_POS = %d" % (pr * 40 + pc))
+    L.append("PLANT_W = %d" % pw)
+    L.append("PLANT_H = %d" % ph)
+    L.append("ARM_POS = %d" % (9 * 40 + room2.SOFA2_X0 // 8))  # the sofa's left arm
+    L.append("ARM_W = 2")
+    L.append("ARM_H = 5")
     L.append("DYNCODES = [%s]" % ", ".join("$%02x" % c for c in dyn))
-    sprite_data = sum(balls, []) + disc + shadow + sum(zz, []) + sum(words, [])
+    sprite_data = sum(balls, []) + disc + shadow + sum(zz, []) + sum(words, []) + sum(shades, [])
     S = ["; generated by gen.py - do not edit", "spritedata"]
     S += byte_lines(sprite_data)
     S.append("spritedata_end")
@@ -739,12 +1004,40 @@ def main():
     L.append("stripes")
     L += byte_lines(LOADER_STRIPES)
     L.append("starpos .word " + ",".join(str(y * 40 + x) for x, y, _ in STARS))
-    L.append("bgscreen")
-    L += byte_lines(scr)
-    L.append("bgcolour")
-    L += byte_lines(col)
+    # the rooms, packed; unpacked into the live background copy on entry
+    for name, data in (("room0scr", scr), ("room0col", col), ("room1scr", scr2), ("room1col", col2)):
+        L.append(name)
+        L += byte_lines(lz(data))
+    hint, hint_frames = hint_script()
+    L.append("HINT_FRAMES = %d" % hint_frames)
+    L.append("HINT_LEN = %d" % len(HINT_TEXT))
+    L.append("HINT_POS = %d" % (HINT_ROW * 40 + (40 - len(HINT_TEXT)) // 2))
+    L.append("hintw = $%02x" % HINT_ZP)
+    L.append("hintfx")
+    L += byte_lines(hint)
+    L.append("hinttext")
+    L += byte_lines(sc(HINT_TEXT))
+    ends, n = [0], 0                         # characters shown after k words
+    for w in HINT_TEXT.split():
+        n += len(w) + 1
+        ends.append(n - 1)
+    L.append("hintend .byte " + ", ".join(str(e) for e in ends + [ends[-1]]))
+    L.append("lamppatch1")                   # shade gone, bare bulb
+    L += byte_lines(patch((scr, col), lamp1))
+    L.append("lamppatch2")                   # shade on the floor
+    L += byte_lines(patch(lamp1, lamp2))
     L.append("termscript")
     L += byte_lines(term_script())
+    L.append("crazyscript")
+    L += byte_lines(crazy_script())
+    L.append("mashchars")
+    L += byte_lines(sc(MASH)[:32])
+    L.append("lift")                         # arc jump: rows above the straight line
+    L += byte_lines([round(52 * math.sin(math.pi * t / 32)) for t in range(33)])  # 1/16 rows
+    notes = [-2, 0, 3, 5, 7, 10, 12, 15]     # G4 A4 C5 D5 E5 G5 A5 C6: pentatonic, mash-proof
+    fn = [int(440 * 2 ** (k / 12) / PAL_HZ) for k in notes]
+    L.append("pianolo .byte " + ", ".join("$%02x" % (f & 255) for f in fn))
+    L.append("pianohi .byte " + ", ".join("$%02x" % (f >> 8) for f in fn))
     # cat frames, (pose*2+facing)*4+phase: a cell count, then per cell its
     # box index (row*8+col), screen offset in the box, palette index and 8
     # bitmap bytes. Meow has a single (cell aligned, front) frame. The
@@ -829,11 +1122,11 @@ def cat_frames():
 
 
 def dyn_codes(scr):
-    """80 screen codes the room never shows: 40 per cat, one per box cell,
-    redefined on the fly in the RAM charset."""
+    """80 screen codes no room (scr: all their codes) and no text ever shows:
+    40 per cat, one per box cell, redefined on the fly in the RAM charset."""
     used = set(scr) | {0x20, 0xa0, 0x2e, 0x2a, 0x51, 0x62, 0x6c, 0x7b, 0xe9, 0xdf}
     used |= set(LOADER_STRIPES)
-    used |= {b for b in term_script() if b < NL}
+    used |= {b for b in term_script() + crazy_script() if b < NL} | set(sc(MASH))
     used |= set(range(0x01, 0x1b)) | set(range(0x30, 0x3a))
     free = [c for c in range(256) if c not in used]
     assert len(free) >= 2 * CAT_W * CAT_H, len(free)

@@ -80,7 +80,27 @@ mouse   lda injn                ; test hook
         lda #3
 +       ora tmp2
         sta tmp2
-jdone   lda tmp2
+jdone   ; F1 (keyboard column 0, row 4) changes room. Row 4 is the line of the
+        ; left button, and "up" on the joystick pulls column 0 low: F1 is down
+        ; if neither is, and the row goes low once column 0 is driven low too.
+        lda $dc00
+        lsr a
+        bcc nof1
+        lda $dc01
+        and #$10
+        beq nof1
+        lda #$c1                ; (port A already holds a 0 in bit 0)
+        sta $dc02
+        lda $dc01
+        lda $dc01
+        ldy #$c0
+        sty $dc02
+        and #$10
+        bne nof1
+        lda tmp2
+        ora #4
+        sta tmp2
+nof1    lda tmp2
 mbtns   sta tmp
         eor mbtn
         and tmp
@@ -90,7 +110,15 @@ mbtns   sta tmp
         lda mdx
         ora mdy
         sta mmove
+        lda mdy                 ; "up + button": up counts for a moment, so a
+        bpl +                   ; flick of the mouse will do
+        lda #10
+        sta uprec
         rts
++       lda uprec
+        beq +
+        dec uprec
++       rts
 
 ; A = new POT value, Y = old one -> A = signed motion, Y = value to keep
 ; (the 1351 manual's routine: changes of one unit are noise)
@@ -127,7 +155,7 @@ player  lda state
         rts
 
 pstates .word ps_free-1, ps_free-1, ps_free-1, ps_bat-1, ps_jump-1, ps_sleep-1, ps_hiss-1, ps_meow-1
-        .word ps_free-1, ps_goeat-1, ps_eat-1
+        .word ps_free-1, ps_goeat-1, ps_eat-1, ps_arc-1, ps_scratch-1
 
 ; sit or carry: mouse-driven
 ps_free lda mclick
@@ -140,10 +168,14 @@ ps_free lda mclick
         jmp p_action
 
 p_move  jsr calc_ovl
-        lda cy
-        cmp #CYMIN
-        bcs pm_floor
-        lda mdy                 ; on the couch: a push down jumps off
+        ldy plat
+        beq pm_floor
+        jsr platidx
+        lda platx0,y
+        sta xmin
+        lda platx1,y
+        sta xmax
+        lda mdy                 ; on furniture: a push down jumps off
         beq pm_x
         bmi pm_x
         clc
@@ -159,10 +191,16 @@ p_move  jsr calc_ovl
         sta tmp
         jsr blocked
         bcs pm_x
+        lda #0
+        sta plat
         lda #CYMIN
         jmp p_jumpto
 
 pm_floor
+        lda #0
+        sta xmin
+        lda #CXMAX
+        sta xmax
         lda mdy
         clc
         adc accy
@@ -205,17 +243,10 @@ pm_x    lda mdx                 ; step = (accx + mdx) asr 1, the odd bit stays
         lda cx
         clc
         adc pstep
-        ldy cy
-        cpy #CYMIN
-        bcc +
-        cmp #CXMAX+1
+        cmp xmax
         bcc pm_setx
-        lda #CXMAX
-        bne pm_setx
-+       cmp #COUCH_MAXX+1
-        bcc pm_setx
-        lda #COUCH_MAXX
-        bne pm_setx
+        lda xmax
+        bcs pm_setx
 pm_left cmp #256-P_STEPX
         bcs +
         lda #256-P_STEPX
@@ -225,17 +256,43 @@ pm_left cmp #256-P_STEPX
         lda cx
         clc
         adc pstep
-        bcs pm_setx             ; carry clear: went below 0
+        bcs +                   ; carry clear: went below 0
         lda #0
++       cmp xmin
+        bcs pm_setx
+        lda xmin
 pm_setx cmp cx
-        beq pm_anim
+        beq pm_edge
         jsr tryx
+        jmp pm_anim
+
+; pushing on at the end: the desk's right end and the piano room's left
+; edge are the two sides of the door
+pm_edge inc edge
+        lda edge
+        cmp #6
+        bcc pm_anim
+        lda room
+        bne +
+        lda plat
+        cmp #PL_DESK
+        bne pm_anim
+        lda dir
+        bne pm_anim
+        beq pm_door
++       lda plat
+        bne pm_anim
+        lda dir
+        beq pm_anim
+pm_door lda #1
+        sta roomreq
 
 pm_anim jsr p_settle
         lda moved
         beq pm_idle
         lda #0
         sta idle
+        sta edge
         inc anim
         lda anim
         lsr a
@@ -309,7 +366,16 @@ p_landed
 
 ; ---- left button
 p_action
-        lda owner               ; carrying: toss it
+        lda uprec               ; with "up": leap from a spot
+        beq +
+        jsr find_spot
+        bcc +
+        lda spbox,y             ; (remember what to do if we can't)
+        lda sptx,y
+        jsr arc_spot
+        bcc +
+        rts
++       lda owner               ; carrying: toss it
         bne +
         jsr kick
         jmp p_paw
@@ -327,7 +393,23 @@ p_grab  lda #FX_GRAB
         sta state
         rts
 
-p_nocat lda cx                  ; the grey cat within a paw's reach?
+p_nocat jsr find_spot           ; at a spot?
+        bcc p_boop
+        cpy #0
+        bne +
+        lda dir                 ; the couch's very end, facing the desk: leap
+        bne p_boop
+        lda cx
+        cmp #COUCH_MAXX-10
+        bcc p_boop
+        jsr arc_spot
+        bcc p_boop
+        rts
++       lda spbox,y             ; something to scratch
+        bmi p_boop
+        jmp scratch_start
+
+p_boop  lda cx                  ; the other cat within a paw's reach?
         sta tmp
         lda cx+1
         jsr absdiff
@@ -365,6 +447,9 @@ p_meowback
         jmp p_paw
 
 p_feeder
+        lda room                ; (the living room's floor only)
+        ora plat
+        bne p_couch
         lda cy
         cmp #FEED_CY+4
         bcs p_couch
@@ -388,7 +473,7 @@ p_feeder
         sbc tx
         sta tx
         jsr eatspot
-        bcs p_meow
+        bcs p_meowj
 +       lda #FEED_CY
         sta ty
         lda #S_GOEAT
@@ -416,22 +501,66 @@ p_pawbowl
 p_tock  lda #FX_KICK
         jsr sfx_play
         jmp p_paw
+p_meowj jmp start_meow
 
-p_couch lda cy                  ; in front of the couch: jump up
-        cmp #CYMIN
-        bcc p_meow
+p_couch lda plat                ; in front of furniture: jump up
+        bne p_meow
+        lda cy
         cmp #CYMIN+2
         bcs p_meow
+        lda room
+        asl a
+        tay
+        jsr p_onto
+        bcs +
+        lda room
+        asl a
+        tay
+        iny
+        jsr p_onto
+        bcc p_meow
++       rts
+
+; platform (table index Y) within reach and free: hop onto it, carry set
+p_onto  lda platjmp,y
+        beq po_no
         lda cx
-        cmp #COUCH_MAXX+1
-        bcs p_meow
+        clc
+        adc #14
+        cmp platx0,y
+        bcc po_no
+        lda platx1,y
+        clc
+        adc #14
+        cmp cx
+        bcc po_no
+        lda cx                  ; the nearest place on it
+        cmp platx0,y
+        bcs +
+        lda platx0,y
++       cmp platx1,y
+        bcc +
+        lda platx1,y
++       sta tx
         sta tmp
-        lda #BED_CY
+        lda platcy,y
+        sta ty
         sta tmp2
-        jsr overlaps            ; the grey cat sleeps there
-        bcs p_meow
-        lda #BED_CY
-        jmp p_jumpto
+        tya
+        and #1
+        clc
+        adc #1
+        sta arcplat
+        lda #0
+        sta arcev
+        jsr overlaps            ; the other cat sleeps there
+        bcs po_no
+        lda #2
+        jsr arc_go
+        sec
+        rts
+po_no   clc
+        rts
 
 p_meow  jmp start_meow
 
