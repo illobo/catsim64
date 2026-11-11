@@ -508,12 +508,18 @@ cats_draw
         bcs +
         inx
 +       lda state               ; ...but a meowing cat always on top
-        cmp #S_MEOW
-        bne +
+        cmp #S_MEOW             ; (not up on the furniture: the beam gets
+        bne +                   ; there before the second cat is drawn)
+        lda cy
+        cmp #CYMIN
+        bcc +
         ldx #1
 +       lda state+1
         cmp #S_MEOW
         bne +
+        lda cy+1
+        cmp #CYMIN
+        bcc +
         ldx #0
 +       txa                     ; (draw uses tmp/tmp2)
         pha
