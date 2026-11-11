@@ -497,6 +497,18 @@ add40   ldx #6
 
 ; ------------------------------------------------------------------ cat drawing
 cats_draw
+        lda cx                  ; the cats' boxes well apart (and last
+        sta tmp                 ; frame's too)?
+        lda cx+1
+        jsr absdiff
+        cmp #44
+        bcs cd_far
+        lda cy
+        sta tmp
+        lda cy+1
+        jsr absdiff
+        cmp #7
+        bcs cd_far
         ldx #0
         jsr restore
         ldx #1
@@ -529,6 +541,68 @@ cats_draw
         tax
         jmp draw
 
+; Each cat on its own, the one higher up first, and a cat that has not
+; changed is not wiped before it is drawn: there is no moment without it
+; for the beam to come by (it blinked on the furniture while the other cat's
+; new frame was being copied).
+cd_far  ldx #0
+        lda cy+1
+        cmp cy
+        bcs +
+        inx
++       txa
+        pha
+        jsr still
+        bcc +
+        jsr restore
++       jsr bghook
+        pla
+        pha
+        tax
+        jsr draw
+        pla
+        eor #1
+        tax
+        pha
+        jsr still
+        bcc +
+        jsr restore
++       pla
+        tax
+        jmp draw
+
+; carry clear if cat X is where and how it was drawn last
+still   jsr cat_offset
+        lda off
+        cmp oldlo,x
+        bne +
+        lda off+1
+        cmp oldhi,x
+        bne +
+        jsr fidx
+        cmp lastf,x
+        bne +
+        clc
+        rts
++       sec
+        rts
+
+; A = cat X's frame: (pose*2 + dir)*4 + phase
+fidx    lda pose,x
+        cmp #P_MEOW
+        php
+        asl a
+        plp
+        beq +                   ; the front view has no direction
+        ora dir,x
++       asl a
+        asl a
+        sta tmp
+        lda cx,x
+        and #3
+        ora tmp
+        rts
+
 restore lda oldlo,x
         sta off
         lda oldhi,x
@@ -556,19 +630,7 @@ draw    stx cat
         asl a
         asl a
         sta palbase
-        lda pose,x              ; frame = (pose*2 + dir)*4 + phase
-        cmp #P_MEOW
-        php
-        asl a
-        plp
-        beq +                   ; the front view has no direction
-        ora dir,x
-+       asl a
-        asl a
-        sta tmp
-        lda cx,x
-        and #3
-        ora tmp
+        jsr fidx
         tay
         cmp lastf,x
         beq +
