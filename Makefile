@@ -36,7 +36,12 @@ dist: release
 	for f in $(DIST_FILES); do cp $$f dist/$$f; done
 	cp docs/img/*.png dist/docs/img/
 	mkdir -p dist/docs/fonts && cp docs/fonts/* dist/docs/fonts/
-	cp $(REL)/catsim64.prg $(REL)/catsim64.d64 dist/docs/download/
+	# docs/download/ keeps every published file at its old address (CSDb
+	# entries link there); each release adds its own versioned names
+	cp docs/download/* dist/docs/download/
+	cp $(REL)/catsim64.prg dist/docs/download/catsim64-$(VERSION).prg
+	cp $(REL)/catsim64.d64 dist/docs/download/catsim64-$(VERSION).d64
+	@grep -q 'catsim64-$(VERSION).d64' docs/index.html || (echo 'docs/index.html does not link catsim64-$(VERSION).d64'; exit 1)
 	@echo "dist/ ready: $(DIST_FILES)"
 
 clean:
