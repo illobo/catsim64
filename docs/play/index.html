@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en" data-nmg-state="boot">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Cat Simulator 64 · play in the browser</title>
+<meta name="description" content="Cat Simulator 64, a game for the Commodore 64 by illobo/netmilk: play it in the browser.">
+<link rel="preload" href="c64.wasm" as="fetch" type="application/wasm" crossorigin>
+<!--
+  Cat Simulator 64 by illobo/netmilk (MIT), on floooh's C64 emulator from chips/chips-test
+  (zlib and MIT, LICENSE-chips.txt and LICENSE-chips-test.txt; c64.js and c64.wasm are the published tiny8bit build).
+  This page only wraps them: the joystick on keys and touch, the Netmilk Arcade embedding protocol v1.
+-->
+<style>
+  :root { --c64-blue: #352879; --c64-light: #6c5eb5; --ink: #f4efe6; --hint: #a39ad6; }
+  html, body { margin: 0; height: 100%; background: #000; color: var(--ink); overflow: hidden;
+    font: 14px/1.3 ui-monospace, "SF Mono", Menlo, monospace; -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none; touch-action: none; }
+  .stage { position: absolute; inset: 0; display: flex; flex-direction: column; }
+  /* the screen: the emulator letterboxes the PAL frame inside its canvas; the canvas runs 24 px below the box, so the
+     emulator's own status line (drawn at its bottom edge, no switch to turn it off) stays out of sight */
+  .screen { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+  #canvas { position: absolute; left: 0; top: 0; width: 100%; height: calc(100% + 24px); display: block; outline: none;
+    image-rendering: pixelated; }
+  .hint { flex: 0 0 auto; padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); text-align: center; color: var(--hint);
+    background: #000; font-size: 13px; letter-spacing: .02em; }
+  .hint kbd { display: inline-block; min-width: 1.6em; padding: 1px 6px; margin: 0 2px; border: 1px solid var(--c64-light);
+    border-bottom-width: 3px; border-radius: 4px; color: var(--ink); font: inherit; text-align: center; }
+  .close { position: absolute; z-index: 3; top: calc(10px + env(safe-area-inset-top)); right: calc(10px + env(safe-area-inset-right));
+    width: 40px; height: 40px; border: 0; border-radius: 50%; background: rgba(53, 40, 121, .85); color: var(--ink);
+    font-size: 22px; line-height: 40px; cursor: pointer; }
+  .close:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .sound { position: absolute; z-index: 3; top: calc(10px + env(safe-area-inset-top)); left: calc(10px + env(safe-area-inset-left));
+    width: 40px; height: 40px; border: 0; border-radius: 50%; background: rgba(53, 40, 121, .85); color: var(--ink);
+    font-size: 20px; line-height: 40px; cursor: pointer; }
+  .sound.off { color: var(--hint); text-decoration: line-through; }
+  .sound:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  html.host-close .close, html.installed .close { display: none; }
+  .boot { position: absolute; inset: 0; z-index: 2; display: grid; place-items: center; background: var(--c64-blue);
+    color: var(--c64-light); font-size: 15px; letter-spacing: .08em; transition: opacity .3s; }
+  html:not([data-nmg-state="boot"]) .boot { opacity: 0; pointer-events: none; }
+  /* touch: the pad under the screen when upright, over its sides when the phone lies down */
+  .pad { display: none; }
+  @media (pointer: coarse) {
+    .hint { display: none; }
+    .pad { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 16px;
+      padding: 16px 22px calc(18px + env(safe-area-inset-bottom)); background: #000; }
+    .stick { position: relative; width: 156px; height: 156px; border-radius: 50%; background: #17123a;
+      box-shadow: inset 0 0 0 2px #2c2468; touch-action: none; }
+    .stick::before, .stick::after { content: ""; position: absolute; left: 50%; top: 50%; background: #2c2468; border-radius: 6px;
+      transform: translate(-50%, -50%); }
+    .stick::before { width: 46px; height: 132px; } .stick::after { width: 132px; height: 46px; }
+    .knob { position: absolute; z-index: 1; left: 50%; top: 50%; width: 56px; height: 56px; margin: -28px 0 0 -28px;
+      border-radius: 50%; background: var(--c64-light); box-shadow: 0 3px 0 #241a5e; transition: transform .06s; }
+    .buttons { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+    .fire { width: 96px; height: 96px; border-radius: 50%; border: 0; background: #b5332c; color: var(--ink);
+      box-shadow: 0 5px 0 #6d1d18; font: 700 15px/1 inherit; letter-spacing: .08em; touch-action: none; }
+    .fire.on { transform: translateY(4px); box-shadow: 0 1px 0 #6d1d18; }
+    .room { padding: 8px 14px; border: 1px solid var(--c64-light); border-radius: 18px; background: transparent;
+      color: var(--hint); font: 12px/1 inherit; letter-spacing: .06em; touch-action: none; }
+    .room.on { background: var(--c64-light); color: var(--ink); }
+  }
+  @media (pointer: coarse) and (orientation: landscape) {
+    .pad { position: absolute; inset: auto 0 0 0; z-index: 2; background: none; pointer-events: none;
+      padding: 0 calc(18px + env(safe-area-inset-right)) calc(14px + env(safe-area-inset-bottom)) calc(18px + env(safe-area-inset-left)); }
+    .pad > * { pointer-events: auto; }
+    .stick, .fire { opacity: .78; }
+  }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="screen">
+    <canvas id="canvas" tabindex="0" aria-label="Cat Simulator 64, the Commodore 64 screen" oncontextmenu="event.preventDefault()"></canvas>
+    <div class="boot" aria-hidden="true">LOAD"CATSIM64",8,1</div>
+  </div>
+  <p class="hint"><kbd>←</kbd><kbd>↑</kbd><kbd>→</kbd><kbd>↓</kbd> move · <kbd>Space</kbd> fire (hold: nap) · <kbd>↑</kbd> + <kbd>Space</kbd> big jump · <kbd>F1</kbd> room · <kbd>M</kbd> sound · <kbd>Esc</kbd> back</p>
+  <div class="pad">
+    <div class="stick" aria-label="Joystick"><span class="knob"></span></div>
+    <div class="buttons">
+      <button class="fire" type="button" aria-label="Fire">FIRE</button>
+      <button class="room" type="button" aria-label="Next room (F1)">F1 ROOM</button>
+    </div>
+  </div>
+</div>
+<button class="close" type="button" aria-label="Close the game">✕</button>
+<button class="sound" type="button" aria-label="Mute (M)" aria-pressed="false">♪</button>
+<script>
+(function () {
+  'use strict';
+  var GAME = 'catsim64', TITLE = document.title;
+  var html = document.documentElement;
+  var setState = function (s) { html.setAttribute('data-nmg-state', s); };
+
+  // the emulator's arguments, read by sokol_args from the address: the game, the joystick on port 2, RUN typed at READY.
+  if (!/[?&]file=/.test(location.search)) history.replaceState(null, '', location.pathname + '?file=catsim64.prg&joystick=digital_2&input=RUN%0A');
+
+  // --- leaving (Netmilk Arcade protocol v1) ---
+  var embedded = window.parent !== window;
+  var installed = false;
+  try { installed = matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches || navigator.standalone === true; } catch (e) {}
+  if (installed) html.classList.add('installed');
+  function toHost(type) { try { window.parent.postMessage({ type: type, game: GAME, v: 1 }, '*'); } catch (e) {} }
+  function leave() {
+    if (embedded) { toHost('nmg:close'); return; }
+    location.href = '../';
+  }
+  document.querySelector('.close').addEventListener('click', leave);
+  window.addEventListener('message', function (e) {
+    if (e.source !== window.parent || !e.data || e.data.type !== 'nmg:host') return;
+    html.classList.toggle('host-close', !!e.data.closeButton);
+  });
+  // Esc never reaches the C64 (it would be RUN/STOP): it leaves. Registered before the emulator, so it runs first.
+  window.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape' && e.code !== 'Escape') return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    if (embedded) toHost('nmg:escape'); else leave();
+  }, true);
+
+  // --- sound: the emulator plays into ctx.destination; every AudioContext made here gets a gain in front of the real
+  // destination, so the ♪ button (and M) mutes without touching the emulator. The choice is kept (catsim64.sound). ---
+  var KEY_SOUND = 'catsim64.sound', soundOn = true, gains = [];
+  try { soundOn = localStorage.getItem(KEY_SOUND) !== 'off'; } catch (e) {}
+  var Native = window.AudioContext || window.webkitAudioContext;
+  if (Native) {
+    var realDest = Object.getOwnPropertyDescriptor(Native.prototype, 'destination') ||
+      Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Native.prototype), 'destination');
+    var Wrapped = function (opts) {
+      var ctx = new Native(opts), g = ctx.createGain();
+      g.gain.value = soundOn ? 1 : 0;
+      g.connect(realDest.get.call(ctx));
+      Object.defineProperty(ctx, 'destination', { get: function () { return g; } });
+      gains.push(g);
+      return ctx;
+    };
+    Wrapped.prototype = Native.prototype;
+    window.AudioContext = Wrapped;
+    if (window.webkitAudioContext) window.webkitAudioContext = Wrapped;
+  }
+  var soundBtn = document.querySelector('.sound');
+  function showSound() { soundBtn.setAttribute('aria-pressed', String(!soundOn)); soundBtn.classList.toggle('off', !soundOn); }
+  function toggleSound() {
+    soundOn = !soundOn;
+    gains.forEach(function (g) { g.gain.value = soundOn ? 1 : 0; });
+    try { localStorage.setItem(KEY_SOUND, soundOn ? 'on' : 'off'); } catch (e) {}
+    showSound();
+  }
+  showSound();
+  soundBtn.addEventListener('click', function () { toggleSound(); try { canvas.focus({ preventScroll: true }); } catch (e) {} });
+  window.addEventListener('keydown', function (e) {   // M: the game uses only the joystick, so the key is free
+    if (e.code !== 'KeyM' || e.repeat) return;
+    e.preventDefault(); e.stopImmediatePropagation(); toggleSound();
+  }, true);
+  window.addEventListener('keyup', function (e) { if (e.code === 'KeyM') e.stopImmediatePropagation(); }, true);
+
+  // --- the emulator ---
+  var canvas = document.getElementById('canvas');
+  window.Module = {
+    canvas: canvas,
+    print: function () {},
+    printErr: function (t) { if (!/^(INFO|WARN)/.test(String(t))) console.warn(t); },
+    onRuntimeInitialized: function () {
+      // the title screen takes about two seconds (the depacker); the curtain lifts as soon as the C64 runs
+      setTimeout(function () {
+        setState('play'); document.title = TITLE;   // the emulator renames the page "C64"
+        try { canvas.focus({ preventScroll: true }); } catch (e) {}
+      }, 600);
+      if (embedded) toHost('nmg:ready');
+    }
+  };
+  var s = document.createElement('script');
+  s.src = 'c64.js'; s.async = true;
+  s.onerror = function () { document.querySelector('.boot').textContent = '?LOAD ERROR'; };
+  document.body.appendChild(s);
+
+  // pause with the page: the emulator stops with requestAnimationFrame; nothing else to do here
+
+  // --- touch: the joystick and the buttons press the same keys the emulator maps to port 2 ---
+  var KEYS = { up: ['ArrowUp', 38], down: ['ArrowDown', 40], left: ['ArrowLeft', 37], right: ['ArrowRight', 39],
+    fire: [' ', 32, 'Space'], f1: ['F1', 112] };
+  var held = {};
+  function send(type, name) {
+    var k = KEYS[name];
+    var e = new KeyboardEvent(type, { key: k[0], code: k[2] || k[0], bubbles: true, cancelable: true });
+    Object.defineProperty(e, 'keyCode', { get: function () { return k[1]; } });
+    Object.defineProperty(e, 'which', { get: function () { return k[1]; } });
+    window.dispatchEvent(e);
+  }
+  // the game reads the joystick once a frame (PAL, 20 ms): a press shorter than MIN_PRESS can fall between two reads,
+  // so its release waits (seen 11/11/2026: a quick tap of Space did not start the game, a held one did)
+  var MIN_PRESS = 70, since = {};
+  function hold(name, on) {
+    if (!!held[name] === on) return;
+    held[name] = on;
+    if (on) { since[name] = performance.now(); send('keydown', name); return; }
+    var wait = MIN_PRESS - (performance.now() - since[name]);
+    if (wait > 0) setTimeout(function () { if (!held[name]) send('keyup', name); }, wait);
+    else send('keyup', name);
+  }
+  // the same for the real keyboard: a quick release of a joystick key is held back and sent later
+  var JOY = { 32: 'fire', 37: 'left', 38: 'up', 39: 'right', 40: 'down', 112: 'f1' }, realSince = {};
+  window.addEventListener('keydown', function (e) { if (e.isTrusted && JOY[e.keyCode] && !e.repeat) realSince[e.keyCode] = performance.now(); }, true);
+  window.addEventListener('keyup', function (e) {
+    var code = e.keyCode, name = JOY[code];
+    if (!e.isTrusted || !name || !realSince[code]) return;
+    var wait = MIN_PRESS - (performance.now() - realSince[code]);
+    if (wait <= 0) return;
+    e.stopImmediatePropagation();
+    setTimeout(function () { send('keyup', name); }, wait);
+  }, true);
+  function capture(el, e) { try { el.setPointerCapture(e.pointerId); } catch (err) { /* a pointer that is already gone */ } }
+  var stick = document.querySelector('.stick'), knob = document.querySelector('.knob'), stickId = null;
+  function aim(e) {
+    var r = stick.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    var dx = e.clientX - cx, dy = e.clientY - cy, d = Math.hypot(dx, dy), max = r.width / 2 - 18;
+    var dead = r.width * 0.12, k = d > max ? max / d : 1;
+    knob.style.transform = 'translate(' + (dx * k) + 'px,' + (dy * k) + 'px)';
+    var a = Math.atan2(dy, dx), on = d > dead;
+    // eight ways: each axis counts within 67.5° of its direction
+    hold('right', on && Math.cos(a) > 0.38); hold('left', on && Math.cos(a) < -0.38);
+    hold('down', on && Math.sin(a) > 0.38); hold('up', on && Math.sin(a) < -0.38);
+  }
+  function release() {
+    stickId = null; knob.style.transform = '';
+    ['up', 'down', 'left', 'right'].forEach(function (n) { hold(n, false); });
+  }
+  stick.addEventListener('pointerdown', function (e) { stickId = e.pointerId; capture(stick, e); aim(e); e.preventDefault(); });
+  stick.addEventListener('pointermove', function (e) { if (e.pointerId === stickId) aim(e); });
+  stick.addEventListener('pointerup', release); stick.addEventListener('pointercancel', release);
+  function button(el, name) {
+    var down = function (e) { capture(el, e); el.classList.add('on'); hold(name, true); e.preventDefault(); };
+    var up = function () { el.classList.remove('on'); hold(name, false); };
+    el.addEventListener('pointerdown', down);
+    el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
+  }
+  button(document.querySelector('.fire'), 'fire');
+  button(document.querySelector('.room'), 'f1');
+  // a lost focus or a hidden page lets every key go, so nothing stays pressed
+  window.addEventListener('blur', function () { release(); hold('fire', false); hold('f1', false); });
+  document.addEventListener('visibilitychange', function () { if (document.hidden) { release(); hold('fire', false); hold('f1', false); } });
+})();
+</script>
+</body>
+</html>

@@ -41,6 +41,9 @@ dist: release
 	cp docs/download/* dist/docs/download/
 	cp $(REL)/catsim64.prg dist/docs/download/catsim64-$(VERSION).prg
 	cp $(REL)/catsim64.d64 dist/docs/download/catsim64-$(VERSION).d64
+	# docs/play/: the game in the browser, on floooh's C64 emulator
+	mkdir -p dist/docs/play && cp docs/play/* dist/docs/play/
+	cp $(REL)/catsim64.prg dist/docs/play/catsim64.prg
 	@grep -q 'catsim64-$(VERSION).d64' docs/index.html || (echo 'docs/index.html does not link catsim64-$(VERSION).d64'; exit 1)
 	@echo "dist/ ready: $(DIST_FILES)"
 
