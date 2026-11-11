@@ -886,15 +886,22 @@ HINT_SYL = [
 
 def hint_script():
     """-> (bytes, frames)"""
+    return speech_script(HINT_SYL, MEOW_BASE[1], HINT_ZP, len(HINT_TEXT.split()))
+
+
+def speech_script(syls, base, zp, words, end=True):
+    """A sentence in meows (syllables as HINT_SYL) in a voice of base Hz; the
+    words said so far go to zero page zp, words + 1 once all are said.
+    -> (bytes, frames); end: SX_END after it"""
     out = [3, 0, 1, 0, 0, 4, 1]                       # hard restart
     out += [1, 0x25, 0xa5, 5, 0x00, 0x06]             # ADSR (quick release between syllables), pulse width
     total = 1
-    for word, n, s0, s1, s2, tp, c0, c1, c2, gap in HINT_SYL:
-        f = [int(MEOW_BASE[1] * 2 ** (s / 12) / PAL_HZ) for s in (s0, s1, s2)]
+    for word, n, s0, s1, s2, tp, c0, c1, c2, gap in syls:
+        f = [int(base * 2 ** (s / 12) / PAL_HZ) for s in (s0, s1, s2)]
         n1 = max(1, round(n * tp))
         n2 = n - n1
         if word:
-            out += [15, HINT_ZP, word]
+            out += [15, zp, word]
         out += [2, f[0] & 255, f[0] >> 8, 6, c0, 3, 0x41]
         for fa, fb, ca, cb, k in ((f[0], f[1], c0, c1, n1), (f[1], f[2], c1, c2, n2)):
             d = int((fb - fa) / k) & 0xffff
@@ -903,7 +910,7 @@ def hint_script():
         if gap:
             out += [4, gap]
         total += n + gap
-    return out + [15, HINT_ZP, len(HINT_TEXT.split()) + 1, 0], total
+    return out + [15, zp, words + 1] + ([0] if end else []), total
 
 
 # ------------------------------------------------------------ output

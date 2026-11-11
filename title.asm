@@ -1,6 +1,7 @@
 ; ------------------------------------------------------------------ title
 ; The start screen (title.py): the logo over raster bars, the controls, the
-; two cats on the floor, the dub tune. Polled, with interrupts off: bars in
+; two cats on the floor, the intro (the black cat says WELCOME TO CAT
+; SIMULATOR, the grey cat meows back), then the dub tune. Polled, with interrupts off: bars in
 ; the top border and behind the logo, black below, the floor colour from
 ; T_FLOOR_LINE. Ends when fire (port 2) or a mouse button (port 1) is
 ; pressed and released, with the screen blanked and the SID silent.
@@ -57,14 +58,13 @@ title   lda #0
         sta tpose+1
         sta tpress
         sta cdark
+        sta twords
+        sta tshown
         jsr sfx_stop
-        ldx #2                  ; the three voices' tracks
--       lda mtrklo,x
-        sta sptrl,x
-        lda mtrkhi,x
-        sta sptrh,x
-        dex
-        bpl -
+        lda #<tintro            ; the cats' voice: the intro first
+        sta sptrl+1
+        lda #>tintro
+        sta sptrh+1
         jsr tbuild
         lda #$1b
         sta $d011
@@ -97,6 +97,7 @@ tfloor  ldx #T_FLOOR_LINE       ; the floor colour; the rest of the work
         sta $d021
 
         jsr sfx
+        jsr tspeech
         inc frame
 
         lda frame               ; the prompt pulses
@@ -131,7 +132,100 @@ tdone   lda #$0b
         sta $d020
         sta $d021
         sta $d418
+        sta twords              ; (the game's hintw)
         jmp sfx_stop
+
+; The intro's words (title.py): each one appears, white, as the black cat
+; says it (twords: the words said, poked by tintro); at T_GO the tune starts,
+; the words stay TS_HOLD frames, then fade through the greys and go.
+TS_HOLD  = 100
+tspeech lda tshown
+        cmp #T_WORDS
+        bcs tsdone
+        cmp twords
+        bcs tsrts
+        tax                     ; word X: white
+        inc tshown
+        lda #WHITE
+        ldy #1
+        jmp tsword
+tsdone  bne tsfade               ; (Z: tshown = T_WORDS)
+        lda twords              ; all shown: the tune once the grey cat
+        cmp #T_GO               ;   has answered
+        bne tsrts
+        ldx #2                  ; the three voices' tracks
+-       lda mtrklo,x
+        sta sptrl,x
+        lda mtrkhi,x
+        sta sptrh,x
+        dex
+        bpl -
+        inc tshown
+        lda #TS_HOLD+4*4
+        sta tsfadet
+tsrts   rts
+tsfade  cmp #T_WORDS+1
+        bne tsrts
+        dec tsfadet
+        lda tsfadet
+        cmp #4*4
+        bcs tsrts
+        and #3
+        bne tsrts
+        lda tsfadet             ; every 4 frames a darker grey, then gone
+        lsr a
+        lsr a
+        tay
+        lda tsramp,y
+        sta tmp2
+        ldx #T_WORDS-1
+-       lda tmp2
+        ldy tsfadet
+        jsr tsword
+        dex
+        bpl -
+        lda tsfadet
+        bne tsrts
+        inc tshown
+        rts
+tsramp  .byte FLOOR_BG, DGREY, GREY, LGREY
+
+; word X in colour A; Y <> 0: its letters, 0: spaces; keeps X
+tsword  sta tmp
+        sty tsclr
+        lda twlo,x
+        sta p1
+        sta p3
+        lda twhi,x
+        sta p1+1
+        clc
+        adc #>(COLRAM-SCREEN)
+        sta p3+1
+        lda twoff,x
+        sta tsi
+        stx tswx
+        ldy #0
+-       lda #32
+        ldx tsclr
+        beq +
+        ldx tsi
+        lda ttext,x
++       ldx tswx
+        sta (p1),y
+        lda tmp
+        sta (p3),y
+        inc tsi
+        iny
+        lda tsi
+        cmp twoff+1,x
+        bne -
+        rts
+
+tshown  .byte 0                 ; words shown; T_WORDS + 1: fading, + 2 done
+tsfadet .byte 0
+tsclr   .byte 0                 ; 0: spaces
+tsi     .byte 0
+tswx     .byte 0
 
 tpulse  .byte WHITE, LGREY, GREY, DGREY, DGREY, GREY, LGREY, WHITE
 

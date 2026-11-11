@@ -209,11 +209,66 @@ def build(g, cats):
     L += g.byte_lines(col)
     L.append("tcharhi                 ; codes $80-$ff")
     L += g.byte_lines(charhi)
+    L += intro(g, scr, col)
     L += music(g)
     open(os.path.join(g.HERE, "title.inc"), "w").write("\n".join(L) + "\n")
     if "--preview" in __import__("sys").argv:
         preview(g, scr, col, charhi)
     print("title: %d cat chars, logo %d cols" % (len(chars), w))
+
+
+# ------------------------------------------------------------------ intro
+# Before the tune: the black cat (cat 0, the player's voice) says WELCOME TO
+# CAT SIMULATOR in meows (gen.speech_script, as the room hint), its words
+# appearing between the cats as they are said; the grey cat answers with a
+# meow, then the tune starts and the words fade. The script pokes the words
+# said into INTRO_ZP (the game's hintw, free on the title), INTRO_GO once
+# the answer is over.
+INTRO_LINES = [(21, "WELCOME TO"), (22, "CAT SIMULATOR")]
+INTRO_ZP = 0xea
+INTRO_SYL = [   # as gen.HINT_SYL: word, frames, pitch start/peak/end, peak at, cutoff start/peak/end, gap
+    (1, 14, 1, 4, 2, 0.4, 0x28, 0x60, 0x48, 0),       # WEL
+    (0, 10, 0, 0, -3, 0.4, 0x30, 0x40, 0x18, 5),      # come
+    (2, 6, -3, -2, -3, 0.5, 0x10, 0x20, 0x14, 3),     # to
+    (3, 14, 2, 5, 3, 0.35, 0x40, 0x70, 0x50, 6),      # CAT, bright "a"
+    (4, 6, 0, 1, 0, 0.5, 0x40, 0x58, 0x40, 0),        # si
+    (0, 6, -1, 0, -1, 0.5, 0x14, 0x24, 0x18, 0),      # mu, closed "oo"
+    (0, 12, 2, 4, 3, 0.4, 0x38, 0x68, 0x50, 0),       # LA
+    (0, 24, 1, 2, -6, 0.25, 0x30, 0x40, 0x0c, 0),     # tor, falling and held
+]
+INTRO_PAUSE = 40          # frames before it speaks, between the two cats, after the meow
+INTRO_ANSWER = 1          # the grey cat's meow kind (gen.MEOW_KINDS): a normal "meow"
+
+
+def intro(g, scr, col):
+    words = []                                 # (screen offset, codes)
+    for row, text in INTRO_LINES:
+        x = (40 - len(text)) // 2
+        for w in text.split():
+            words.append((row * 40 + x, scl(w)))
+            x += len(w) + 1
+        assert all(scr[row * 40 + c] == 32 for c in range((40 - len(text)) // 2, x - 1)), "intro: cells taken"
+    syl, frames = g.speech_script(INTRO_SYL, g.MEOW_BASE[0], INTRO_ZP, len(words), end=False)
+    go = len(words) + 2
+    meow = "meow%d" % (4 + INTRO_ANSWER)
+    s = [SX_WAIT, INTRO_PAUSE, SX_POKE, 0x22, 0] + syl + [SX_POKE, 0x22, 0xff, SX_WAIT, INTRO_PAUSE // 2,
+         SX_POKE, 0x22, 1, SX_CALL, "<" + meow, ">" + meow, SX_POKE, 0x22, 0xff, SX_WAIT, INTRO_PAUSE // 2,
+         SX_POKE, INTRO_ZP, go, SX_END]
+    L = ["T_WORDS = %d" % len(words), "T_GO = %d" % go, "twords = $%02x" % INTRO_ZP]
+    L.append("twlo .byte " + ", ".join("<(SCREEN+%d)" % o for o, _ in words))
+    L.append("twhi .byte " + ", ".join(">(SCREEN+%d)" % o for o, _ in words))
+    starts, n = [], 0
+    for _, c in words:
+        starts.append(n)
+        n += len(c)
+    L.append("twoff .byte " + ", ".join(str(v) for v in starts + [n]))
+    L.append("ttext")
+    L += g.byte_lines(sum((c for _, c in words), []))
+    L.append("tintro")
+    for i in range(0, len(s), 16):
+        L.append("        .byte " + ",".join(v if isinstance(v, str) else "$%02x" % v for v in s[i:i + 16]))
+    print("title intro: %d frames of speech" % frames)
+    return L
 
 
 # ------------------------------------------------------------------ music
