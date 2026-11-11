@@ -413,7 +413,7 @@ p_boop  lda cx                  ; the other cat within a paw's reach?
         sta tmp
         lda cx+1
         jsr absdiff
-        cmp #40
+        cmp #32                 ; (26 is touching)
         bcs p_feeder
         lda cy
         sta tmp
